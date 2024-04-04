@@ -743,6 +743,7 @@ apply_block(State) ->
 			may_be_rebase(State);
 		{B, [PrevB | _PrevBlocks], {{not_validated, awaiting_nonce_limiter_validation},
 				_Timestamp}} ->
+			% TODO cancel pending rebases
 			case maps:get(nonce_limiter_validation_scheduled, State, false) of
 				true ->
 					{noreply, State};
@@ -775,6 +776,9 @@ may_be_rebase(State) ->
 			end
 	end.
 
+may_be_rebase(_B, _Siblings, #{ pending_rebase := true } = State) ->
+	% TODO schedule next validation step or call handle_found_solution
+	{noreply, State};
 may_be_rebase(_B, [], State) ->
 	{noreply, State};
 may_be_rebase(#block{ cumulative_diff = CDiff } = B,
@@ -802,6 +806,9 @@ may_be_rebase(#block{ cumulative_diff = CDiff } = B,
 					not_found ->
 						may_be_rebase(B, Siblings, State);
 					Args ->
+						% TODO
+						% - set pending_rebase
+						% - check PrevB status - request validation or call handle_found_solution
 						handle_found_solution(Args, PrevB, State)
 				end
 			end;
@@ -810,9 +817,11 @@ may_be_rebase(#block{ cumulative_diff = CDiff } = B,
 				not_found ->
 					may_be_rebase(B, Siblings, State);
 				Args ->
+					% TODO
+					% - set pending_rebase
+					% - check Sib status - request validation or call handle_found_solution
 					handle_found_solution(Args, Sib, State)
-			end,
-			{noreply, State}
+			end
 	end;
 may_be_rebase(B, [_Sib | Siblings], State) ->
 	%% Cumulative diff mismatch - cannot rebase.
