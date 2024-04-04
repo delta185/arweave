@@ -7,7 +7,8 @@
 		mark_tip/2, get/2, get_earliest_not_validated_from_longest_chain/1,
 		get_longest_chain_cache/1,
 		get_block_and_status/2, remove/2, get_checkpoint_block/1, prune/2,
-		get_by_solution_hash/5, is_known_solution_hash/2]).
+		get_by_solution_hash/5, is_known_solution_hash/2,
+		get_siblings/2]).
 
 -include_lib("arweave/include/ar.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -21,10 +22,10 @@
 %% validated: block is validated but does not belong to the tip fork
 %% not_validated: block is not validated yet
 %% none: null status
--type validation_status() :: on_chain | validated | not_validated | none.
--type nonce_limiter_validation_status() :: nonce_limiter_validated | 
-	nonce_limiter_validation_scheduled | awaiting_nonce_limiter_validation.
--type block_status() :: validation_status() | {not_validated, nonce_limiter_validation_status()}.
+%-type validation_status() :: on_chain | validated | not_validated | none.
+%-type nonce_limiter_validation_status() :: nonce_limiter_validated |
+%	nonce_limiter_validation_scheduled | awaiting_nonce_limiter_validation.
+%-type block_status() :: validation_status() | {not_validated, nonce_limiter_validation_status()}.
 
 %% @doc ETS table: block_cache
 %% {block, BlockHash} => {#block{}, block_status(), Timestamp, set(Children)}
@@ -447,6 +448,33 @@ get_by_solution_hash(Tab, SolutionH, H, CDiff, PrevCDiff, [H2 | L], _B) ->
 			B2;
 		B2 ->
 			get_by_solution_hash(Tab, SolutionH, H, CDiff, PrevCDiff, L, B2)
+	end.
+
+%% @doc Return the list of siblings of the given block, if any.
+get_siblings(Tab, B) ->
+	H = B#block.indep_hash,
+	PrevH = B#block.previous_block,
+	case ets:lookup(Tab, {block, PrevH}) of
+		[] ->
+			[];
+		[{_, {_B, _Status, _CurrentTimestamp, Children}}] ->
+			sets:fold(
+				fun(SibH, Acc) ->
+					case SibH of
+						H ->
+							Acc;
+						_ ->
+							case ets:lookup(Tab, {block, SibH}) of
+								[] ->
+									Acc;
+								[{_, {Sib, _, _, _}}] ->
+									[Sib | Acc]
+							end
+					end
+				end,
+				[],
+				Children
+			)
 	end.
 
 %%%===================================================================
@@ -1030,6 +1058,7 @@ block_cache_test() ->
 	assert_tip(block_id(B1)),
 	assert_max_cdiff({0, block_id(B1)}),
 	assert_is_valid_fork(true, on_chain, B1),
+	?assertEqual([], get_siblings(bcache_test, B1)),
 
 	%% Re-adding B1 shouldn't change anything - i.e. nothing should be updated because the
 	%% block is already on chain
@@ -1073,6 +1102,7 @@ block_cache_test() ->
 	assert_max_cdiff({1, block_id(B2)}),
 	assert_is_valid_fork(true, on_chain, B1),
 	assert_is_valid_fork(true, not_validated, B2),
+	?assertEqual([], get_siblings(bcache_test, B2)),
 
 	%% Add a TXID to B2, but still don't mark as validated
 	%%
@@ -1130,6 +1160,8 @@ block_cache_test() ->
 	assert_is_valid_fork(true, on_chain, B1),
 	assert_is_valid_fork(true, not_validated, B2),
 	assert_is_valid_fork(true, not_validated, B1_2),
+	?assertEqual([B2], get_siblings(bcache_test, B1_2)),
+	?assertEqual([B1_2], get_siblings(bcache_test, B2)),
 
 	%% Even though B2 is marked as a tip, it is still lower difficulty than B1_2 so will
 	%% not be included in the longest chain
@@ -1298,6 +1330,9 @@ block_cache_test() ->
 	assert_is_valid_fork(true, validated, B2_2),
 	assert_is_valid_fork(true, not_validated, B2_3),
 	assert_is_valid_fork(true, on_chain, B3),
+	?assertEqual([B2_2], get_siblings(bcache_test, B3)),
+	?assertEqual([B3], get_siblings(bcache_test, B2_2)),
+	?assertEqual([B2], get_siblings(bcache_test, B1_2)),
 
 	%% B3->B2->B1 fork is still heaviest
 	%%
@@ -1363,6 +1398,8 @@ block_cache_test() ->
 	assert_is_valid_fork(true, not_validated, B2_3),
 	assert_is_valid_fork(true, validated, B3),
 	assert_is_valid_fork(true, not_validated, B4),
+	?assertEqual([], get_siblings(bcache_test, B2_3)),
+	?assertEqual([], get_siblings(bcache_test, B4)),
 
 	%% Height	Block/Status
 	%%
